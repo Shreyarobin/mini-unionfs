@@ -1,0 +1,12 @@
+# Build files
+build/
+*.o
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+
+# VS Code settings
+.vscode/
