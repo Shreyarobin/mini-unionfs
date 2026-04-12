@@ -1,12 +1,10 @@
-CC = gcc
 CFLAGS = -Wall -D_FILE_OFFSET_BITS=64 `pkg-config fuse --cflags`
 LIBS = `pkg-config fuse --libs`
-
 TARGET = unionfs
-SRC = main.c
+SRC = src/main.c src/path_utils.c
 
 all:
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LIBS)
+	$(CC) $(CFLAGS) -I include -o $(TARGET) $(SRC) $(LIBS)
 
 clean:
 	rm -f $(TARGET)
