@@ -10,11 +10,16 @@
 #include <fcntl.h>
 #include "../include/path_utils.h"
 #include "../include/layer_utils.h"
+#include "../include/cow.h"
+#include "../include/whiteout.h"
 
 static int ufs_getattr(const char *path, struct stat *st) {
-    char upath[4096], lpath[4096];
+    char upath[4096], lpath[4096], wh_path[4096];
     build_upper_path(upath, sizeof(upath), path);
     build_lower_path(lpath, sizeof(lpath), path);
+    snprintf(wh_path, sizeof(wh_path), "upper/.wh_%s", path + 1);
+
+    if (file_exists(wh_path)) return -ENOENT;
 
     printf("[MERGE] checking upper for %s\n", path);
     if (file_exists(upath)) {
@@ -38,22 +43,26 @@ static int ufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     DIR *dp;
     struct dirent *de;
 
-    // Read upper
+    // Read upper, skip whiteout files
     dp = opendir(upath);
     if (dp != NULL) {
-        while ((de = readdir(dp)) != NULL)
+        while ((de = readdir(dp)) != NULL) {
+            if (is_whiteout(de->d_name)) continue;
             filler(buf, de->d_name, NULL, 0);
+        }
         closedir(dp);
     }
 
-    // Read lower, skip duplicates
+    // Read lower, skip duplicates and whiteout-deleted files
     dp = opendir(lpath);
     if (dp != NULL) {
         while ((de = readdir(dp)) != NULL) {
-            char temp[4096];
+            char temp[4096], wh_path[4096];
             snprintf(temp, sizeof(temp), "%s/%s", upath, de->d_name);
-            if (!file_exists(temp))
-                filler(buf, de->d_name, NULL, 0);
+            snprintf(wh_path, sizeof(wh_path), "upper/.wh_%s", de->d_name);
+            if (file_exists(temp)) continue;
+            if (file_exists(wh_path)) continue;
+            filler(buf, de->d_name, NULL, 0);
         }
         closedir(dp);
     }
@@ -62,22 +71,17 @@ static int ufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 static int ufs_open(const char *path, struct fuse_file_info *fi) {
     printf("[OPEN] %s\n", path);
-    char upath[4096], lpath[4096];
+    char upath[4096], lpath[4096], wh_path[4096];
     build_upper_path(upath, sizeof(upath), path);
     build_lower_path(lpath, sizeof(lpath), path);
+    snprintf(wh_path, sizeof(wh_path), "upper/.wh_%s", path + 1);
+
+    if (file_exists(wh_path)) return -ENOENT;
 
     if ((fi->flags & O_ACCMODE) != O_RDONLY) {
         if (!file_exists(upath) && file_exists(lpath)) {
-            // copy-up
-            FILE *src = fopen(lpath, "rb");
-            FILE *dst = fopen(upath, "wb");
-            if (src && dst) {
-                char buf[4096]; size_t n;
-                while ((n = fread(buf, 1, sizeof(buf), src)) > 0)
-                    fwrite(buf, 1, n, dst);
-            }
-            if (src) fclose(src);
-            if (dst) fclose(dst);
+            printf("[COW] Triggered for %s\n", path);
+            if (copy_file(lpath, upath) != 0) return -errno;
         }
     }
 
@@ -134,19 +138,37 @@ static int ufs_truncate(const char *path, off_t size) {
     build_lower_path(lpath, sizeof(lpath), path);
 
     if (!file_exists(upath) && file_exists(lpath)) {
-        FILE *src = fopen(lpath, "rb");
-        FILE *dst = fopen(upath, "wb");
-        if (src && dst) {
-            char buf[4096]; size_t n;
-            while ((n = fread(buf, 1, sizeof(buf), src)) > 0)
-                fwrite(buf, 1, n, dst);
-        }
-        if (src) fclose(src);
-        if (dst) fclose(dst);
+        printf("[COW] Triggered for %s\n", path);
+        if (copy_file(lpath, upath) != 0) return -errno;
     }
 
     if (truncate(upath, size) == -1) return -errno;
     return 0;
+}
+
+static int ufs_unlink(const char *path) {
+    printf("[UNLINK] %s\n", path);
+    char upath[4096], lpath[4096], wh_path[4096];
+    build_upper_path(upath, sizeof(upath), path);
+    build_lower_path(lpath, sizeof(lpath), path);
+    snprintf(wh_path, sizeof(wh_path), "upper/.wh_%s", path + 1);
+
+    // File in upper → delete directly
+    if (file_exists(upath)) {
+        if (unlink(upath) == -1) return -errno;
+        return 0;
+    }
+
+    // File only in lower → create whiteout
+    if (file_exists(lpath)) {
+        printf("[WHITEOUT] Created for %s\n", path);
+        FILE *f = fopen(wh_path, "w");
+        if (!f) return -errno;
+        fclose(f);
+        return 0;
+    }
+
+    return -ENOENT;
 }
 
 static struct fuse_operations ufs_ops = {
@@ -158,6 +180,7 @@ static struct fuse_operations ufs_ops = {
     .create   = ufs_create,
     .release  = ufs_release,
     .truncate = ufs_truncate,
+    .unlink   = ufs_unlink,
 };
 
 int main(int argc, char *argv[]) {
