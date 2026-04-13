@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini UnionFS Explorer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+  header { padding: 1.5rem 2rem; border-bottom: 1px solid #2d3748; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; font-weight: 600; color: #fff; }
+  header span { font-size: 12px; background: #1a202c; border: 1px solid #2d3748; padding: 3px 10px; border-radius: 20px; color: #a0aec0; }
+  .main { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; padding: 1.5rem 2rem; }
+  .panel { background: #1a202c; border: 1px solid #2d3748; border-radius: 10px; padding: 1rem; }
+  .panel.mount { border-color: #553c9a; }
+  .panel-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #a0aec0; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .panel-title .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot-lower { background: #48bb78; }
+  .dot-upper { background: #4299e1; }
+  .dot-mount { background: #9f7aea; }
+  .file-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; transition: background 0.15s; border: 1px solid transparent; }
+  .file-item:hover { background: #2d3748; border-color: #4a5568; }
+  .file-name { flex: 1; }
+  .tag { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 600; }
+  .tag-lower { background: #1c4532; color: #68d391; }
+  .tag-upper { background: #1a365d; color: #63b3ed; }
+  .tag-wh { background: #3d1515; color: #fc8181; }
+  .tag-merged { background: #322659; color: #b794f4; }
+  .empty { font-size: 12px; color: #4a5568; padding: 8px 10px; font-style: italic; }
+  .ops { padding: 0 2rem 1.5rem; }
+  .ops-panel { background: #1a202c; border: 1px solid #2d3748; border-radius: 10px; padding: 1.25rem; }
+  .ops-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #a0aec0; margin-bottom: 14px; }
+  .ops-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  input { background: #0f1117; border: 1px solid #2d3748; border-radius: 6px; padding: 7px 12px; color: #e2e8f0; font-size: 13px; flex: 1; min-width: 120px; }
+  input:focus { outline: none; border-color: #553c9a; }
+  button { padding: 7px 16px; border-radius: 6px; border: 1px solid #2d3748; background: #2d3748; color: #e2e8f0; font-size: 13px; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+  button:hover { background: #4a5568; }
+  button.primary { background: #2a4365; border-color: #2b6cb0; color: #90cdf4; }
+  button.primary:hover { background: #2b6cb0; color: #fff; }
+  button.danger { background: #3d1515; border-color: #822727; color: #fc8181; }
+  button.danger:hover { background: #822727; color: #fff; }
+  button.success { background: #1c4532; border-color: #276749; color: #68d391; }
+  button.success:hover { background: #276749; color: #fff; }
+  .log-panel { padding: 0 2rem 1.5rem; }
+  .log { background: #0f1117; border: 1px solid #2d3748; border-radius: 10px; padding: 1rem; font-family: monospace; font-size: 12px; max-height: 160px; overflow-y: auto; line-height: 1.8; }
+  .log-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #a0aec0; margin-bottom: 10px; }
+  .l-cow { color: #f6ad55; }
+  .l-wh { color: #fc8181; }
+  .l-merge { color: #63b3ed; }
+  .l-write { color: #68d391; }
+  .l-err { color: #fc8181; }
+  .l-info { color: #a0aec0; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #48bb78; }
+  .status-dot.off { background: #fc8181; }
+  .result-box { background: #0f1117; border: 1px solid #2d3748; border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: 13px; color: #68d391; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Mini UnionFS Explorer</h1>
+  <span id="mount-status">checking...</span>
+  <div style="margin-left:auto;display:flex;gap:8px">
+    <button onclick="refresh()" style="font-size:12px;padding:5px 12px">refresh</button>
+    <button onclick="autoRefresh()" id="auto-btn" style="font-size:12px;padding:5px 12px">auto: off</button>
+  </div>
+</header>
+
+<div class="main">
+  <div class="panel">
+    <div class="panel-title"><span class="dot dot-lower"></span>lower/ <span style="color:#2d6a4f;font-size:10px">(read-only base)</span></div>
+    <div id="lower-list"><div class="empty">loading...</div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-title"><span class="dot dot-upper"></span>upper/ <span style="color:#2b6cb0;font-size:10px">(writable layer)</span></div>
+    <div id="upper-list"><div class="empty">loading...</div></div>
+  </div>
+  <div class="panel mount">
+    <div class="panel-title"><span class="dot dot-mount"></span>mount/ <span style="color:#553c9a;font-size:10px">(merged view)</span></div>
+    <div id="mount-list"><div class="empty">loading...</div></div>
+  </div>
+</div>
+
+<div class="ops">
+  <div class="ops-panel">
+    <div class="ops-title">operations</div>
+    <div class="ops-row">
+      <input id="fname" placeholder="filename e.g. notes.txt" value="notes.txt"/>
+      <input id="fcontent" placeholder="content" value="hello world"/>
+    </div>
+    <div class="ops-row">
+      <button class="success" onclick="op('add_lower')">+ add to lower</button>
+      <button class="primary" onclick="op('write')">write to mount</button>
+      <button onclick="op('read')">read from mount</button>
+      <button class="danger" onclick="op('delete')">delete from mount</button>
+    </div>
+    <div class="result-box" id="result-box"></div>
+  </div>
+</div>
+
+<div class="log-panel">
+  <div class="log-title">operation log</div>
+  <div class="log" id="log"><span class="l-info">ready.</span></div>
+</div>
+
+<script>
+let autoInterval = null;
+
+function addLog(msg, cls='l-info'){
+  const log = document.getElementById('log');
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = '> ' + msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+function fileIcon(){ return '📄 '; }
+
+function renderList(id, files, tagType){
+  const el = document.getElementById(id);
+  if(!files || files.length === 0){ el.innerHTML = '<div class="empty">empty</div>'; return; }
+  el.innerHTML = files.map(f => {
+    let tag = tagType;
+    let cls = 'tag-' + tagType;
+    if(f.is_whiteout){ tag = 'whiteout'; cls = 'tag-wh'; }
+    return `<div class="file-item" onclick="quickRead('${f.name}')">
+      <span style="font-size:14px">📄</span>
+      <span class="file-name">${f.name}</span>
+      <span style="font-size:11px;color:#4a5568">${f.size}b</span>
+      <span class="tag ${cls}">${tag}</span>
+    </div>`;
+  }).join('');
+}
+
+async function refresh(){
+  try {
+    const res = await fetch('/api/state');
+    const data = await res.json();
+    renderList('lower-list', data.lower, 'lower');
+    renderList('upper-list', data.upper, 'upper');
+    renderList('mount-list', data.mount, 'merged');
+    const mounted = data.mount.length >= 0;
+    const st = document.getElementById('mount-status');
+    st.textContent = data.mount !== null ? 'mounted' : 'not mounted';
+  } catch(e) {
+    addLog('could not reach server — is Flask running?', 'l-err');
+  }
+}
+
+async function quickRead(fname){
+  document.getElementById('fname').value = fname;
+  await op('read');
+}
+
+async function op(type){
+  const fname = document.getElementById('fname').value.trim();
+  const fcontent = document.getElementById('fcontent').value.trim();
+  const box = document.getElementById('result-box');
+  box.style.display = 'none';
+
+  if(!fname){ addLog('enter a filename first', 'l-err'); return; }
+
+  if(type === 'add_lower'){
+    const r = await fetch('/api/add_lower', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename:fname, content:fcontent})});
+    const d = await r.json();
+    addLog(`[LOWER] added ${fname}`, 'l-write');
+    refresh();
+  }
+  else if(type === 'write'){
+    addLog(`[WRITE] writing ${fname} to mount...`, 'l-merge');
+    const r = await fetch('/api/write', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename:fname, content:fcontent})});
+    const d = await r.json();
+    if(r.ok){ addLog(`[WRITE] ${fname} written — check if CoW triggered in terminal`, 'l-write'); }
+    else { addLog(`[ERROR] ${d.error}`, 'l-err'); }
+    refresh();
+  }
+  else if(type === 'read'){
+    const r = await fetch('/api/read', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename:fname})});
+    const d = await r.json();
+    if(r.ok){
+      addLog(`[READ] ${fname} → "${d.content.trim()}"`, 'l-merge');
+      box.textContent = `${fname}: "${d.content.trim()}"`;
+      box.style.display = 'block';
+    } else { addLog(`[ERROR] ${d.error}`, 'l-err'); }
+  }
+  else if(type === 'delete'){
+    const r = await fetch('/api/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename:fname})});
+    const d = await r.json();
+    if(r.ok){ addLog(`[WHITEOUT] ${fname} deleted — whiteout may appear in upper/`, 'l-wh'); }
+    else { addLog(`[ERROR] ${d.error}`, 'l-err'); }
+    refresh();
+  }
+}
+
+function autoRefresh(){
+  const btn = document.getElementById('auto-btn');
+  if(autoInterval){
+    clearInterval(autoInterval);
+    autoInterval = null;
+    btn.textContent = 'auto: off';
+  } else {
+    autoInterval = setInterval(refresh, 2000);
+    btn.textContent = 'auto: on';
+    addLog('auto-refresh every 2s', 'l-info');
+  }
+}
+
+refresh();
+</script>
+</body>
+</html>
